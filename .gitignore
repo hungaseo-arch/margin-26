@@ -9,14 +9,11 @@ __pycache__/
 # ── 환경설정 (secrets / 로컬 설정) ──────
 .env
 
-# ── 입력 원본자료 (기밀: 매출/매입 데이터) ──
-6.2.1 Delivery Status(List Only).xlsx
-9.1 AP Invoice Status.xlsx
-
-# ── 생성 산출물 (보고서) ────────────────
-sales analysis report *.xlsx
-sales analysis report *.pdf
-margin_raw_rev.xlsx
+# ── 기밀 데이터 & 산출물: 모든 Excel/PDF 제외 ──
+# (원본 매출·매입 자료, 생성된 월별 보고서 전부 — 기밀)
+*.xlsx
+*.xls
+*.pdf
 
 # ── 참조 번들 / 기타 ────────────────────
 pyproject.zip
