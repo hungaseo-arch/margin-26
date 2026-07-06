@@ -21,7 +21,9 @@
 `Item Code`가 **품목당 1건**으로 유일하고 깨끗해, 별도 가공 없이 그대로 씁니다.
 
 1. `skiprows=4`로 읽어 `Unnamed: 10`(= Unit Cost) → `P_Price(IDR)`로 rename
-2. `Item Code` 결측·원가 `0`/결측 행 제외
+2. **Unit Cost가 0/공란이면 원장 내 대체 원가열로 재계산(보완)**:
+   `Ending(20÷19)` → `Beginning(4÷3)` → `Good Receipt(6÷5)` → `Landed(7÷5)` 순
+3. 그래도 모든 금액열이 0인 품목만 제외 → **미커버 목록**(`uncovered_items.xlsx`)으로 관리
 
 > **참고**: 초기에는 매입세금계산서(`9.1 AP Invoice Status`)를 원가로 썼으나, 한 품목에
 > 부대비용(≈15%)·취소전표·0원 라인이 섞여 **마진율이 80~100%로 과대 계산**되는 문제가
@@ -43,6 +45,7 @@
 |---|---|
 | `sales analysis report YYYY-MM.xlsx` | 5개 시트 (Row_Data / 업체 / 상품 / 아이템 / 브랜드) |
 | `sales analysis report YYYY-MM.pdf`  | A4 세로, 표 4종 (브랜드 → 상품 → 업체 → 아이템) |
+| `uncovered_items.xlsx` | **원가 미매칭 품목** 목록 3시트 (월별 요약 / 코드별 합계 / 월별·코드별 상세) — 구매팀 원장 등록 검토용 |
 
 > 두 파일은 **동일한 파일명 형태**를 사용하며, 월은 `06`처럼 **숫자 2자리**로 표시됩니다.
 > PDF 본문 헤더의 월 표기(`SALES ANALYSIS for Jun 2026`)만 영문 월 이름을 사용합니다.

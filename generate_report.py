@@ -71,15 +71,33 @@ def load_sales():
 
 
 def load_cost_table():
-    """Item Code별 구매단가 = 재고원장(9.2)의 'Unit Cost' 컬럼(=Unnamed:10)."""
+    """Item Code별 구매단가 = 재고원장(9.2) 기반.
+    1순위 Unit Cost(Unnamed:10). 0/공란이면 원장 내 대체 원가열로 재계산(보완):
+      Ending(20÷19) → Beginning(4÷3) → Good Receipt(6÷5) → Landed(7÷5).
+    모든 금액열이 0인 품목은 재계산 불가 → 제외(미커버 목록으로 처리).
+    """
     sheets = pd.ExcelFile(PURCHASE_FILE).sheet_names
     sheet = next((s for s in sheets if s.startswith("9.2")), sheets[0])
-    p = pd.read_excel(PURCHASE_FILE, sheet_name=sheet, skiprows=4)
-    p = p.rename(columns={"Unnamed: 10": "P_Price(IDR)"})   # Unit Cost 열
+    raw = pd.read_excel(PURCHASE_FILE, sheet_name=sheet, skiprows=4)
 
-    p = p[["Item Code", "P_Price(IDR)"]].dropna(subset=["Item Code"])
-    p["P_Price(IDR)"] = pd.to_numeric(p["P_Price(IDR)"], errors="coerce")
-    p = p[p["P_Price(IDR)"] > 0]                             # 원가 0/결측 제외
+    def num(col):
+        return pd.to_numeric(raw[col], errors="coerce")
+
+    def ratio(amount, qty):
+        # 금액>0, 수량>0 일 때만 유효한 단가 (0나눗셈·inf 방지)
+        r = amount / qty
+        return r.where((qty > 0) & (amount > 0))
+
+    unit = num("Unnamed: 10")                    # Unit Cost (ERP 이동평균)
+    cost = unit.where(unit > 0)                                    # 1순위
+    cost = cost.fillna(ratio(num("Unnamed: 20"), num("Unnamed: 19")))   # Ending 단가
+    cost = cost.fillna(ratio(num("Unnamed: 4"),  num("Unnamed: 3")))    # Beginning 단가
+    cost = cost.fillna(ratio(num("Unnamed: 6"),  num("Good Receipt")))  # Good Receipt 단가
+    cost = cost.fillna(ratio(num("Landed Cost"), num("Good Receipt")))  # Landed 단가
+
+    p = pd.DataFrame({"Item Code": raw["Item Code"], "P_Price(IDR)": cost})
+    p = p.dropna(subset=["Item Code"])
+    p = p[p["P_Price(IDR)"] > 0]
     p = p.drop_duplicates("Item Code", keep="last")
     return p[["Item Code", "P_Price(IDR)"]]
 
@@ -243,6 +261,47 @@ def save_pdf(fname, month_name, year, current_date, df_cust, df_prod, df_item, d
     pdf.output(fname)
 
 
+# ===== 4b. 미커버(원가없는) 품목 목록 Excel ===================
+def export_uncovered(df_s_all, cost, fname="uncovered_items.xlsx"):
+    """보고 기간 중 원가 매칭이 안 된 매출을 월별·코드별로 정리해 Excel 저장."""
+    codes = set(cost["Item Code"].astype(str).str.strip())
+    start = f"{YEAR}-{START_MONTH:02d}-01"
+    end = f"{YEAR}-{END_MONTH:02d}-{calendar.monthrange(YEAR, END_MONTH)[1]:02d}"
+    s = df_s_all[(df_s_all["Delivery Date.1"] >= start) & (df_s_all["Delivery Date.1"] <= end)].copy()
+    s["Month"] = s["Delivery Date.1"].dt.strftime("%Y-%m")
+    s["code"] = s["Item Code"].astype(str).str.strip()
+    unc = s[~s["code"].isin(codes)].copy()
+
+    # 월별 요약
+    summ = s.groupby("Month").agg(Sales_IDR=(SALES_COL, "sum")).reset_index()
+    us = unc.groupby("Month").agg(Uncovered_IDR=(SALES_COL, "sum"),
+                                  Uncovered_rows=(SALES_COL, "size")).reset_index()
+    summ = summ.merge(us, how="left", on="Month").fillna({"Uncovered_IDR": 0, "Uncovered_rows": 0})
+    summ["Coverage(%)"] = (1 - summ["Uncovered_IDR"] / summ["Sales_IDR"]) * 100
+    tot = pd.DataFrame({"Month": ["TOTAL"], "Sales_IDR": [summ["Sales_IDR"].sum()],
+                        "Uncovered_IDR": [summ["Uncovered_IDR"].sum()],
+                        "Uncovered_rows": [summ["Uncovered_rows"].sum()]})
+    tot["Coverage(%)"] = (1 - tot["Uncovered_IDR"] / tot["Sales_IDR"]) * 100
+    summ = pd.concat([summ, tot], ignore_index=True)
+
+    # 월별·코드별 상세
+    detail = (unc.groupby(["Month", "Item Code", "Description", "Brand", "Type 3", "Type 2"])
+              .agg(Qty=("Q'ty", "sum"), Sales_IDR=(SALES_COL, "sum"))
+              .reset_index().sort_values(["Month", "Sales_IDR"], ascending=[True, False]))
+
+    # 코드별 합계(월 무관, 구매팀 등록 검토용)
+    bycode = (unc.groupby(["Item Code", "Description", "Brand", "Type 3", "Type 2"])
+              .agg(Qty=("Q'ty", "sum"), Sales_IDR=(SALES_COL, "sum"), Rows=(SALES_COL, "size"))
+              .reset_index().sort_values("Sales_IDR", ascending=False))
+
+    writer = pd.ExcelWriter(fname, engine="openpyxl")
+    summ.to_excel(writer, sheet_name="1.Summary(월별)", index=False)
+    bycode.to_excel(writer, sheet_name="2.코드별 합계", index=False)
+    detail.to_excel(writer, sheet_name="3.월별·코드별 상세", index=False)
+    writer._save()
+    print(f"[uncovered] {fname}  미커버 {unc[SALES_COL].sum():,.0f} IDR / {len(unc)}행 / 코드 {unc['code'].nunique()}종")
+
+
 # ===== 5. 메인 루프 ===========================================
 def main():
     df_s_all = load_sales()
@@ -269,7 +328,8 @@ def main():
         print(f"[done] {stem}  rows={len(df)}  Sales={tot['Sales(IDR)']}  "
               f"Margin={tot['Margin(%)']}  Cover={tot['Coverage(%)']}")
 
-    print("완료: 모든 월 보고서 생성")
+    export_uncovered(df_s_all, cost)      # 미커버 품목 목록 Excel
+    print("완료: 모든 월 보고서 + 미커버 목록 생성")
 
 
 if __name__ == "__main__":
