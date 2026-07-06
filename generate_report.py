@@ -99,7 +99,19 @@ def load_cost_table():
     p = p.dropna(subset=["Item Code"])
     p = p[p["P_Price(IDR)"] > 0]
     p = p.drop_duplicates("Item Code", keep="last")
-    return p[["Item Code", "P_Price(IDR)"]]
+    p = p[["Item Code", "P_Price(IDR)"]]
+
+    # 수동 원가 보정: 원장·AP에 원가가 없는 품목을 cost_overrides.csv 로 채움
+    #   (예: 판매 'E4'와 구매 'E3'가 동일 규격 명칭변경인 경우)
+    ovf = Path("cost_overrides.csv")
+    if ovf.exists():
+        ov = pd.read_csv(ovf)
+        ov["Item Code"] = ov["Item Code"].astype(str).str.strip()
+        ov["P_Price(IDR)"] = pd.to_numeric(ov["P_Price(IDR)"], errors="coerce")
+        ov = ov[["Item Code", "P_Price(IDR)"]].dropna()
+        p = p[~p["Item Code"].astype(str).str.strip().isin(ov["Item Code"])]
+        p = pd.concat([p, ov], ignore_index=True)
+    return p
 
 
 # ===== 서식 함수 ==============================================
