@@ -1,13 +1,13 @@
 """
 월별 마진 보고서 일괄 생성기
-- 매출자료(6.2.1 Delivery Status) + 구매자료(9.1 AP Invoice Status)를 결합
+- 매출자료(6.2.1 Delivery Status) + 원가자료(9.2 Inventory Ledger)를 결합
 - 지정한 연도의 여러 개월에 대해 각각 Excel(.xlsx) + PDF 보고서를 생성
 
-[원가 산정 방식]  ※ 마진율 이상치(>50%) 재검증 반영
-  - 구매단가 = Item Code별 '수량가중평균' 단가 = Σ Amount(IDR) / Σ Q'ty
-  - 취소 전표('A/P Invoice Cancelled')와 단가 0원 라인은 제외
-  - '최신 1건' 방식은 부대비용(≈15%)·0원·취소 라인을 잘못 집어 마진율을
-    과대(80~100%) 계산하는 문제가 있어 가중평균으로 대체함
+[원가 산정 방식]
+  - 구매단가 = 재고원장(9.2 Inventory Ledger)의 'Unit Cost' 컬럼 (Item Code별 1건)
+  - ERP가 산정한 이동평균/표준 단가라 품목당 단가가 유일하고 깨끗함
+  - (참고) 9.1 AP Invoice 방식은 부대비용·취소·0원 라인이 섞여 마진율이
+    과대(80~100%) 계산되는 문제가 있었음 → 재고원장 단가로 전환
 
 [매출 정합성]
   - 매입단가가 없는(미매칭) 품목도 매출에는 포함 → 월 매출합계가 원본 피벗과 일치
@@ -49,7 +49,7 @@ END_MONTH = int(os.getenv("END_MONTH", "6"))
 MONTHS = range(START_MONTH, END_MONTH + 1)   # 기본 1월 ~ 6월
 
 SALES_FILE = os.getenv("SALES_FILE", "6.2.1 Delivery Status(List Only).xlsx")
-PURCHASE_FILE = os.getenv("PURCHASE_FILE", "9.1 AP Invoice Status.xlsx")
+PURCHASE_FILE = os.getenv("PURCHASE_FILE", "9.2 Inventory_Ledger_For_Costing.xlsx")
 LOGO = os.getenv("LOGO_FILE", "ASCENDO_Blue.png")
 
 # Unicode 폰트 (Windows 기본 - 맑은 고딕)
@@ -71,21 +71,17 @@ def load_sales():
 
 
 def load_cost_table():
-    """Item Code별 수량가중평균 구매단가. 취소전표·0원 라인 제외."""
+    """Item Code별 구매단가 = 재고원장(9.2)의 'Unit Cost' 컬럼(=Unnamed:10)."""
     sheets = pd.ExcelFile(PURCHASE_FILE).sheet_names
-    sheet = next((s for s in sheets if s.startswith("9.1")), sheets[0])
-    p = pd.read_excel(PURCHASE_FILE, sheet_name=sheet, skiprows=7)
-    p = p.drop("Unnamed: 0", axis=1, errors="ignore")
+    sheet = next((s for s in sheets if s.startswith("9.2")), sheets[0])
+    p = pd.read_excel(PURCHASE_FILE, sheet_name=sheet, skiprows=4)
+    p = p.rename(columns={"Unnamed: 10": "P_Price(IDR)"})   # Unit Cost 열
 
-    if "3.AP Invoice Type" in p.columns:
-        p = p[p["3.AP Invoice Type"].astype(str).str.strip() == "A/P Invoice"]
-    p = p[p["Unit Price (IDR)"].fillna(0) > 0]   # 0원(무상/조정) 라인 제외
-    p = p[p["Q'ty"].fillna(0) > 0]               # 수량 없는/음수 라인 제외
-    p = p.dropna(subset=["Item Code"])
-
-    g = p.groupby("Item Code").agg(A=("Amount (IDR)", "sum"), Q=("Q'ty", "sum"))
-    g["P_Price(IDR)"] = g["A"] / g["Q"]          # 수량가중평균
-    return g.reset_index()[["Item Code", "P_Price(IDR)"]]
+    p = p[["Item Code", "P_Price(IDR)"]].dropna(subset=["Item Code"])
+    p["P_Price(IDR)"] = pd.to_numeric(p["P_Price(IDR)"], errors="coerce")
+    p = p[p["P_Price(IDR)"] > 0]                             # 원가 0/결측 제외
+    p = p.drop_duplicates("Item Code", keep="last")
+    return p[["Item Code", "P_Price(IDR)"]]
 
 
 # ===== 서식 함수 ==============================================
