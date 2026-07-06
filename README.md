@@ -24,8 +24,8 @@
 2. **Unit Cost가 0/공란이면 원장 내 대체 원가열로 재계산(보완)**:
    `Ending(20÷19)` → `Beginning(4÷3)` → `Good Receipt(6÷5)` → `Landed(7÷5)` 순
 3. **그래도 원가가 없는 품목**은 `cost_overrides.csv`(있으면)로 수동 보정 —
-   원장·AP에 원가가 없는 품목의 단가를 `Item Code,P_Price(IDR)`로 지정
-   (예: 판매 `E4`와 구매 `E3`가 동일규격 명칭변경인 경우). *이 파일은 공급단가라 git 제외.*
+   `Item Code,P_Price(IDR),P_Price(USD)` 로 지정(예: 판매 `E4`=구매 `E3` 명칭변경).
+   **fill-only**: 원장에 실제 원가가 생기면 자동 무시(수동보정은 금회 한정). *공급단가라 git 제외.*
 4. 그래도 없는 품목만 제외 → **미커버 목록**(`uncovered_items.xlsx`)으로 관리
 
 > **참고**: 초기에는 매입세금계산서(`9.1 AP Invoice Status`)를 원가로 썼으나, 한 품목에
@@ -47,9 +47,14 @@
 
 | 파일 | 내용 |
 |---|---|
-| `sales analysis report YYYY-MM.xlsx` | 5개 시트 (Row_Data / 업체 / 상품 / 아이템 / 브랜드) |
-| `sales analysis report YYYY-MM.pdf`  | A4 세로, 표 4종 (브랜드 → 상품 → 업체 → 아이템) |
+| `sales analysis report YYYY-MM.xlsx` / `.pdf` | **IDR 보고서** — 5개 시트 (Row_Data / 업체 / 상품 / 아이템 / 브랜드) |
+| `sales analysis report YYYY-MM USD.xlsx` / `.pdf` | **USD 보고서** — 동일 구조. 매출=`Discounted Amount (USD)`, 원가=USD 재고원장 Unit Cost |
 | `uncovered_items.xlsx` | **원가 미매칭 품목** 목록 3시트 (월별 요약 / 코드별 합계 / 월별·코드별 상세) — 구매팀 원장 등록 검토용 |
+
+> **IDR·USD 마진율이 다른 이유(환율)**: 매출 USD는 **판매시점 환율**, 원가 USD는 재고원장의
+> **매입/원가계상 시점 환율**로 환산됩니다. 두 시점 환율이 다르면(예: 루피아 약세) 마진율이
+> 통화별로 달라집니다. 같은 환율이면 두 마진율은 동일 — **환차 효과이지 오류가 아닙니다.**
+> (2026-06 예: IDR 14.8% vs USD 12.5%, 매입~판매 사이 루피아 약 2.8% 약세)
 
 > 두 파일은 **동일한 파일명 형태**를 사용하며, 월은 `06`처럼 **숫자 2자리**로 표시됩니다.
 > PDF 본문 헤더의 월 표기(`SALES ANALYSIS for Jun 2026`)만 영문 월 이름을 사용합니다.
