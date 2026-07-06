@@ -1,0 +1,15 @@
+[project]
+name = "margin-26"
+version = "0.1.0"
+description = "월별 판매·매입(AP Invoice) 자료를 결합해 마진을 산출하고 Excel·PDF 보고서를 생성"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "pandas>=3.0.2",
+    "openpyxl>=3.1.5",   # Excel 읽기/쓰기
+    "fpdf2>=2.8.7",      # PDF 생성
+    "pillow>=11.0.0",    # PDF 로고 이미지 처리 (fpdf2 image)
+    "ipykernel>=6.29.0", # VS Code / Jupyter 노트북 커널
+    "jupyter>=1.1.1",
+    "nbconvert>=7.17.1", # 노트북 CLI 실행 (--execute)
+]
