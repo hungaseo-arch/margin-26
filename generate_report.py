@@ -65,6 +65,7 @@ CURRENCIES = [
     ("IDR", PURCHASE_FILE, ""),
     ("USD", PURCHASE_FILE_USD, " USD"),
 ]
+FULL_COV = 0.9999   # 커버율 100% 판정 임계 (이상이면 Coverage 컬럼 삭제)
 # ─────────────────────────────────────────────────────────────
 
 
@@ -204,6 +205,12 @@ def build_month(df_s_all, cost, start_date, end_date, cur="IDR"):
     df_item = fmt(summarize(df, "Description", "TOTAL", cur, with_qty=True, sort_col="Margin"), cur)
     df_bran = fmt(summarize(df, "Brand", "TOTAL", cur), cur)   # 브랜드: 매출순 유지
 
+    # 커버율 100%면 Coverage(%) 컬럼 삭제(미달이면 유지 + 상단 표시)
+    coverage = df["_CostedSales"].sum() / df["_Sales"].sum() if df["_Sales"].sum() else 1.0
+    if coverage >= FULL_COV:
+        for t in (df_cust, df_prod, df_item, df_bran):
+            t.drop(columns=["Coverage(%)"], inplace=True, errors="ignore")
+
     # Row_Data 정리
     row = (df.drop(columns=["_CostedSales", "_Sales"])
              .rename(columns={"P_Price": f"P_Price({cur})", "_PAmt": f"P_Amount({cur})",
@@ -212,9 +219,46 @@ def build_month(df_s_all, cost, start_date, end_date, cur="IDR"):
     return row, df_cust, df_prod, df_item, df_bran
 
 
+# ===== 환율(IDR/USD) 계산 =====================================
+def month_fx(res_idr, res_usd):
+    """월 환율(IDR/USD): 매출=판매시점, 원가=재고원가시점 (합계 환산율)."""
+    di, du = res_idr[0], res_usd[0]
+    sales_idr = di["Discounted Amount (IDR)"].sum()
+    sales_usd = du["Discounted Amount (USD)"].sum()
+    cost_idr = pd.to_numeric(di["P_Amount(IDR)"], errors="coerce").sum()
+    cost_usd = pd.to_numeric(du["P_Amount(USD)"], errors="coerce").sum()
+    return {
+        "sales_rate": (sales_idr / sales_usd) if sales_usd else None,
+        "cost_rate": (cost_idr / cost_usd) if cost_usd else None,
+    }
+
+
+def fx_frame(fx, coverage=None):
+    rows = [
+        ("매출 환율 (판매/딜리버리 시점, IDR/USD)", None if fx["sales_rate"] is None else round(fx["sales_rate"])),
+        ("원가 환율 (매입/재고원가 시점, IDR/USD)", None if fx["cost_rate"] is None else round(fx["cost_rate"])),
+    ]
+    if coverage is not None and coverage < FULL_COV:
+        rows.append(("Coverage(%) — 원가 미매칭 매출 포함", round(coverage * 100, 1)))
+    return pd.DataFrame(rows, columns=["항목", "값"])
+
+
+def month_coverage(res_idr):
+    """월 원가매칭 커버율 (통화무관, IDR Row_Data 기준)."""
+    di = res_idr[0]
+    tot = di["Discounted Amount (IDR)"].sum()
+    if not tot:
+        return 1.0
+    costed = di.loc[pd.to_numeric(di["P_Amount(IDR)"], errors="coerce").notna(),
+                    "Discounted Amount (IDR)"].sum()
+    return costed / tot
+
+
 # ===== 3. Excel 저장 ==========================================
-def save_excel(fname, df, df_cust, df_prod, df_item, df_bran):
+def save_excel(fname, df, df_cust, df_prod, df_item, df_bran, fx=None, coverage=None):
     writer = pd.ExcelWriter(fname, engine="openpyxl")
+    if fx:
+        fx_frame(fx, coverage).to_excel(writer, sheet_name="0.FX Rate", index=False)
     df.to_excel(writer, sheet_name="1.Row_Data")
     df_cust.to_excel(writer, sheet_name="2.Margin by Customer")
     df_prod.to_excel(writer, sheet_name="3.Margin by Product")
@@ -224,7 +268,7 @@ def save_excel(fname, df, df_cust, df_prod, df_item, df_bran):
 
 
 # ===== 4. PDF 저장 ============================================
-def save_pdf(fname, month_name, year, current_date, df_cust, df_prod, df_item, df_bran, cur="IDR"):
+def save_pdf(fname, month_name, year, current_date, df_cust, df_prod, df_item, df_bran, cur="IDR", fx=None, coverage=None):
     class PDF(FPDF):
         def header(self):
             self.set_font("Malgun", "B", 20)
@@ -232,7 +276,7 @@ def save_pdf(fname, month_name, year, current_date, df_cust, df_prod, df_item, d
             self.set_fill_color(240, 255, 255)
             self.set_line_width(0.4)
             self.cell(0, 20, border=1, align="C", fill=1)
-            self.image(LOGO, 15, 14, 50)
+            self.image(LOGO, 15, 14, 42.5)   # 로고 85% 축소 (50 → 42.5mm)
             self.cell(-150, 20, f"SALES ANALYSIS for {month_name} {year} ({cur})",
                       new_x="LMARGIN", new_y="NEXT", align="C")
             self.ln(10)
@@ -252,8 +296,24 @@ def save_pdf(fname, month_name, year, current_date, df_cust, df_prod, df_item, d
     pdf.add_page()
     line_height = pdf.font_size * 2
 
+    # 커버율 100% 미달 시 상단에 경고 표시
+    if coverage is not None and coverage < FULL_COV:
+        pdf.set_font("Malgun", "B", 9)
+        pdf.set_text_color(180, 0, 0)
+        pdf.cell(0, line_height, f"※ Coverage {coverage * 100:.1f}% — 원가 미매칭 매출 포함 (마진은 원가있는 분만 산출)",
+                 new_x="LMARGIN", new_y="NEXT", align="L")
+        pdf.set_text_color(32, 32, 32)
+        pdf.set_font("Malgun", size=7.5)
+
     pdf.cell(0, line_height, f"Date : {current_date}", new_x="LMARGIN", new_y="NEXT", align="R")
     pdf.cell(0, line_height, "Made : Jonghwan SEO", new_x="LMARGIN", new_y="NEXT", align="R")
+    if fx:
+        if fx.get("sales_rate"):
+            pdf.cell(0, line_height, f"FX Sales (delivery) : {fx['sales_rate']:,.0f} IDR/USD",
+                     new_x="LMARGIN", new_y="NEXT", align="R")
+        if fx.get("cost_rate"):
+            pdf.cell(0, line_height, f"FX Cost (inventory) : {fx['cost_rate']:,.0f} IDR/USD",
+                     new_x="LMARGIN", new_y="NEXT", align="R")
 
     list_df = [df_bran, df_prod, df_cust, df_item]
     list_df_name = ["1. MARGIN by BRANDs", "2. MARGIN by PRODUCTs", "3. MARGIN by CUSTOMERs", "4. MARGIN by ITEMs"]
@@ -291,7 +351,10 @@ def save_pdf(fname, month_name, year, current_date, df_cust, df_prod, df_item, d
                     pdf.cell(col_width, line_height, datum, border=1, align="C")
             pdf.ln(line_height)
 
-    pdf.output(fname)
+    try:
+        pdf.output(fname)
+    except PermissionError:
+        print(f"[warn] '{fname}' 쓰기 실패 — 파일이 뷰어에서 열려 있습니다. 닫고 재실행하세요. (건너뜀)")
 
 
 # ===== 4b. 미커버(원가없는) 품목 목록 Excel ===================
@@ -336,34 +399,37 @@ def export_uncovered(df_s_all, cost, fname="uncovered_items.xlsx"):
 def main():
     df_s_all = load_sales()
     current_date = datetime.datetime.now().strftime("%b-%d, %Y")
+    cost_idr = load_cost_table(PURCHASE_FILE, "IDR")
+    cost_usd = load_cost_table(PURCHASE_FILE_USD, "USD")
 
-    for cur, ledger, suffix in CURRENCIES:
-        cost = load_cost_table(ledger, cur)
-        for m in MONTHS:
-            last_day = calendar.monthrange(YEAR, m)[1]
-            start_date = f"{YEAR}-{m:02d}-01"
-            end_date = f"{YEAR}-{m:02d}-{last_day:02d}"
-            month_name = datetime.date(YEAR, m, 1).strftime("%b")
+    for m in MONTHS:
+        last_day = calendar.monthrange(YEAR, m)[1]
+        start_date = f"{YEAR}-{m:02d}-01"
+        end_date = f"{YEAR}-{m:02d}-{last_day:02d}"
+        month_name = datetime.date(YEAR, m, 1).strftime("%b")
+
+        res_idr = build_month(df_s_all, cost_idr, start_date, end_date, "IDR")
+        res_usd = build_month(df_s_all, cost_usd, start_date, end_date, "USD")
+        if res_idr is None:
+            print(f"[skip] {YEAR}-{m:02d} : 데이터 없음")
+            continue
+
+        fx = month_fx(res_idr, res_usd)         # 매출·원가 환산환율(IDR/USD)
+        cov = month_coverage(res_idr)           # 원가매칭 커버율(통화무관)
+
+        for cur, res, suffix in [("IDR", res_idr, ""), ("USD", res_usd, " USD")]:
+            df, df_cust, df_prod, df_item, df_bran = res
             stem = f"sales analysis report {YEAR}-{m:02d}{suffix}"
-
-            result = build_month(df_s_all, cost, start_date, end_date, cur)
-            if result is None:
-                print(f"[skip] {stem} : 데이터 없음")
-                continue
-
-            df, df_cust, df_prod, df_item, df_bran = result
-            save_excel(f"{stem}.xlsx", df, df_cust, df_prod, df_item, df_bran)
+            save_excel(f"{stem}.xlsx", df, df_cust, df_prod, df_item, df_bran, fx, cov)
             save_pdf(f"{stem}.pdf", month_name, str(YEAR), current_date,
-                     df_cust, df_prod, df_item, df_bran, cur)
-
+                     df_cust, df_prod, df_item, df_bran, cur, fx, cov)
             tot = df_bran[df_bran["Brand"] == "TOTAL"].iloc[0]
-            print(f"[done] {stem}  rows={len(df)}  Sales({cur})={tot[f'Sales({cur})']}  "
-                  f"Margin={tot['Margin(%)']}  Cover={tot['Coverage(%)']}")
+            print(f"[done] {stem}  Sales({cur})={tot[f'Sales({cur})']}  Margin={tot['Margin(%)']}")
 
-        if cur == "IDR":
-            export_uncovered(df_s_all, cost)   # 미커버 목록(통화무관) 1회
+        print(f"       Coverage {cov*100:.1f}%  |  FX 매출 {fx['sales_rate']:,.0f} / 원가 {fx['cost_rate']:,.0f} IDR/USD")
 
-    print("완료: IDR + USD 보고서 생성")
+    export_uncovered(df_s_all, cost_idr)   # 미커버 목록(통화무관) 1회
+    print("완료: IDR + USD 보고서 생성 (환율 기록 포함)")
 
 
 if __name__ == "__main__":
