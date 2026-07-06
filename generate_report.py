@@ -128,8 +128,9 @@ def pct(x):
 
 
 # ===== 집계 헬퍼 =============================================
-def summarize(df, keys, total_key, with_qty=False):
-    """keys 기준 집계 + TOTAL행 + 비율/커버율. (매출=전체, 마진=원가있는 행만)"""
+def summarize(df, keys, total_key, with_qty=False, sort_col="Sales"):
+    """keys 기준 집계 + TOTAL행(맨 위) + 비율/커버율. 정렬은 sort_col 내림차순.
+    (매출=전체, 마진=원가있는 행만)"""
     aggmap = {
         "Sales": (SALES_COL, "sum"),              # 전체 매출 (정합성)
         "CostedSales": ("CostedSales", "sum"),    # 원가 매칭된 매출 (마진 분모)
@@ -144,7 +145,13 @@ def summarize(df, keys, total_key, with_qty=False):
     g["Coverage(%)"] = g["CostedSales"] / g["Sales"]
     g["Sales Ratio(%)"] = g["Sales"] / g.loc[total_key, "Sales"]
     g["Margin Ratio(%)"] = g["Margin"] / g.loc[total_key, "Margin"]
-    g = g.sort_values("Sales", ascending=False).reset_index()
+    g = g.reset_index()
+
+    # TOTAL 행을 맨 위에 고정, 나머지는 sort_col 내림차순 정렬
+    first_key = keys[0] if isinstance(keys, list) else keys
+    is_total = g[first_key].astype(str) == "TOTAL"
+    g = pd.concat([g[is_total], g[~is_total].sort_values(sort_col, ascending=False)],
+                  ignore_index=True)
 
     g = g.rename(columns={"Sales": "Sales(IDR)", "Margin": "Margin(IDR)"})
     order = list(keys) if isinstance(keys, list) else [keys]
@@ -183,11 +190,12 @@ def build_month(df_s_all, cost, start_date, end_date):
     df["CostedSales"] = df[SALES_COL].where(df["P_Price(IDR)"].notna())  # 원가 있는 매출만
     df["Margin(%)"] = df["Margin(IDR)"] / df["CostedSales"]
 
-    df_cust = fmt(summarize(df, "Buyer", "TOTAL"))
-    df_prod = fmt(summarize(df, ["Type 3", "Type 2"], ("TOTAL", "ALL"), with_qty=True)
+    # 표 2·3·4(상품·업체·아이템): TOTAL 맨 위 + 마진금액(Margin) 내림차순
+    df_cust = fmt(summarize(df, "Buyer", "TOTAL", sort_col="Margin"))
+    df_prod = fmt(summarize(df, ["Type 3", "Type 2"], ("TOTAL", "ALL"), with_qty=True, sort_col="Margin")
                   .rename(columns={"Type 3": "Product", "Type 2": "Type"}))
-    df_item = fmt(summarize(df, "Description", "TOTAL", with_qty=True))
-    df_bran = fmt(summarize(df, "Brand", "TOTAL"))
+    df_item = fmt(summarize(df, "Description", "TOTAL", with_qty=True, sort_col="Margin"))
+    df_bran = fmt(summarize(df, "Brand", "TOTAL"))   # 표 1(브랜드): 매출순 유지
     return df, df_cust, df_prod, df_item, df_bran
 
 
